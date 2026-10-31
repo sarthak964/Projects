@@ -1,0 +1,16 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {permissions,allowedUploadItems,validateNotes,validatePhoto} from '../src/workflow.ts';
+import {request} from '../src/api.ts';
+const job={id:1,renter_id:4,reviewer_id:5,status:'accepted',address:'Demo',checklist_json:['Walls','Taps'],price:150,created_at:'2026-10-30T00:00:00'};
+const renter={id:4,role:'renter',name:'Renter',phone:'9000000001'} as const;
+const reviewer={id:5,role:'reviewer',name:'Reviewer',phone:'9000000002'} as const;
+const review={job_id:1,status:'pending',rejected_items:['Walls'],fee_amount:25,fee_status:'held',human_fee_amount:0,human_fee_status:'none',ai_verdict:null};
+test('only assigned reviewer can mark a visit',()=>{assert.equal(permissions(reviewer,job,review).visit,true);assert.equal(permissions(renter,job,review).visit,false);assert.equal(permissions({...reviewer,id:6},job,review).visit,false);});
+test('draft reporting and uploads are restricted to draft stages',()=>{assert.equal(permissions(reviewer,{...job,status:'visited'},review).report,true);assert.equal(permissions(reviewer,{...job,status:'report_submitted'},review).upload,false);});
+test('renter controls distinguish initial review and replacement recheck',()=>{const verified={...job,status:'verified'};assert.equal(permissions(renter,verified,review).initialReview,true);assert.equal(permissions(reviewer,verified,review).initialReview,false);assert.equal(permissions(renter,verified,{...review,status:'awaiting_renter_recheck'}).recheck,true);assert.equal(permissions(renter,verified,{...review,status:'awaiting_renter_recheck'}).initialReview,false);});
+test('replacement uploads use only rejected checklist items',()=>{assert.deepEqual(allowedUploadItems({...job,status:'verified'},{...review,status:'awaiting_reupload'}),['Walls']);assert.deepEqual(allowedUploadItems({...job,status:'visited'},review),['Walls','Taps']);});
+test('notes limits match practical backend rules',()=>{assert.ok(validateNotes('short'));assert.ok(validateNotes('!!!!!!!!!!!!'));assert.ok(validateNotes('a'.repeat(10001)));assert.equal(validateNotes('Walls and taps were checked.'),'');});
+test('photo preflight rejects empty, oversized and unsupported files',()=>{assert.ok(validatePhoto({name:'a.png',size:0}));assert.ok(validatePhoto({name:'a.png',size:8*1024*1024+1}));assert.ok(validatePhoto({name:'a.gif',size:10}));assert.equal(validatePhoto({name:'a.webp',size:10}),'');});
+test('rating is offered only to owning renter after paid',()=>{assert.equal(permissions(renter,{...job,status:'paid'},review).rating,true);assert.equal(permissions(renter,{...job,status:'refunded'},review).rating,false);assert.equal(permissions(reviewer,{...job,status:'paid'},review).rating,false);});
+test('successful null response is valid for optional profile and rating lookups',async()=>{globalThis.fetch=async()=>Response.json(null);assert.equal(await request('/ratings/job/1'),null);});
